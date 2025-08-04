@@ -4,7 +4,7 @@ from rest_framework import status
 from .models import Category
 from .serializers import *
 from django.shortcuts import get_object_or_404
-from django.db.models import Q
+from django.db.models import Q,Avg
 
 class CategoryListCreateView(APIView):
     """
@@ -221,3 +221,29 @@ class SubCategorySearchView(APIView):
                 "message": "Please provide a keyword using ?search=your_keyword",
                 "data": []
             }, status=400)
+        
+class ServiceCardListView(APIView):
+    """
+    API to fetch summarized service cards including:
+    - Title
+    - Price
+    - Short Description
+    - Average Rating & Review Count
+    """
+
+    def get(self, request):
+        services = SubCategory.objects.all()
+        if not services.exists():
+            return Response({
+                "status": 404,
+                "message": "No services available",
+                "data": []
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = ServiceCardSerializer(services, many=True)
+        return Response({
+            "status": 200,
+            "message": "Service cards fetched successfully",
+            "data": serializer.data
+        }, status=status.HTTP_200_OK)
+    
