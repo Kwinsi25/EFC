@@ -4,6 +4,7 @@ from rest_framework import status
 from .models import Category
 from .serializers import *
 from django.shortcuts import get_object_or_404
+from django.db.models import Q
 
 class CategoryListCreateView(APIView):
     """
@@ -187,3 +188,36 @@ class StepDetailView(APIView):
             "message": "Step deleted",
             "data": {}
         })
+    
+class SubCategorySearchView(APIView):
+    """
+    Search sub-categories (services) based on keyword in name or description.
+    """
+
+    def get(self, request):
+        keyword = request.query_params.get("search", "").strip()
+
+        if keyword:
+            services = SubCategory.objects.filter(
+                Q(name__icontains=keyword) | Q(description__icontains=keyword)
+            )
+
+            if services.exists():
+                serializer = SubCategorySerializer(services, many=True)
+                return Response({
+                    "status": 200,
+                    "message": "Search result fetched successfully",
+                    "data": serializer.data
+                }, status=200)
+            else:
+                return Response({
+                    "status": 404,
+                    "message": f"No services found for keyword: '{keyword}'",
+                    "data": []
+                }, status=404)
+        else:
+            return Response({
+                "status": 400,
+                "message": "Please provide a keyword using ?search=your_keyword",
+                "data": []
+            }, status=400)
