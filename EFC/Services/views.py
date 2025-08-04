@@ -118,4 +118,72 @@ class SubCategoryDetailView(APIView):
             "data": {}
         })
     
-  
+class StepListCreateView(APIView):
+    """
+    GET: List all steps
+    POST: Create a new step
+    """
+    def get(self, request):
+        steps = Step.objects.all().order_by('step_number')
+        serializer = StepSerializer(steps, many=True)
+        return Response({
+            "status": 200,
+            "message": "Steps fetched successfully",
+            "data": serializer.data
+        })
+
+    def post(self, request):
+        serializer = StepSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response({
+                "status": 201,
+                "message": "Step created successfully",
+                "data": serializer.data
+            })
+        return Response({
+            "status": 400,
+            "message": "Validation failed",
+            "errors": serializer.errors
+        })
+        
+
+class StepDetailView(APIView):
+    """
+    GET: Get step by ID
+    PATCH: Update a step
+    DELETE: Delete a step
+    """
+    def get(self, request, step_id):
+        step = get_object_or_404(Step, id=step_id)
+        serializer = StepSerializer(step)
+        return Response({
+            "status": 200,
+            "message": "Step retrieved",
+            "data": serializer.data
+        })
+
+    def patch(self, request, step_id):
+        step = get_object_or_404(Step, id=step_id)
+        serializer = StepSerializer(step, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response({
+                "status": 200,
+                "message": "Step updated",
+                "data": serializer.data
+            })
+        return Response({
+            "status": 400,
+            "message": "Update failed",
+            "errors": serializer.errors
+        })
+
+    def delete(self, request, step_id):
+        step = get_object_or_404(Step, id=step_id)
+        step.delete()
+        return Response({
+            "status": 200,
+            "message": "Step deleted",
+            "data": {}
+        })
