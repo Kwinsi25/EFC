@@ -10,4 +10,5 @@ urlpatterns = [
     path('steps/<int:step_id>/', StepDetailView.as_view(), name='step-detail'),
     path("search/", SubCategorySearchView.as_view(), name="subcategory-search"),
     path("cards/", ServiceCardListView.as_view(), name="service-cards"),
+    path('subcategories/<int:subcategory_id>/full/', SubCategoryFullDetailView.as_view(), name='subcategory-full-detail'),
 ]

@@ -246,4 +246,42 @@ class ServiceCardListView(APIView):
             "message": "Service cards fetched successfully",
             "data": serializer.data
         }, status=status.HTTP_200_OK)
-    
+
+class SubCategoryFullDetailView(APIView):
+    def get(self, request, subcategory_id):
+        try:
+            subcategory = SubCategory.objects.get(id=subcategory_id)
+        except SubCategory.DoesNotExist:
+            return Response({
+                "status": 404,
+                "message": "Service not found",
+                "data": {}
+            }, status=404)
+
+        # Fetch steps
+        steps = Step.objects.filter(service=subcategory).order_by('step_number')
+        steps_data = StepSerializer(steps, many=True).data
+
+        # Fetch approved reviews
+        reviews = ReviewRating.objects.filter(service=subcategory, is_approved=True)
+        reviews_data = ReviewRatingSerializer(reviews, many=True).data
+        avg_rating = reviews.aggregate(models.Avg('rating'))['rating__avg'] or 0
+        review_count = reviews.count()
+
+        response_data = {
+            "id": subcategory.id,
+            "title": subcategory.name,
+            "description": subcategory.description,
+            "cover_image": request.build_absolute_uri(subcategory.cover_image.url) if subcategory.cover_image else None,
+            "price": subcategory.price,
+            "steps": steps_data,
+            "average_rating": round(avg_rating, 1),
+            "total_reviews": review_count,
+            "reviews": reviews_data
+        }
+
+        return Response({
+            "status": 200,
+            "message": "Service detail fetched successfully",
+            "data": response_data
+        }, status=200)

@@ -37,3 +37,10 @@ class ServiceCardSerializer(serializers.ModelSerializer):
 
     def get_short_description(self, obj):
         return obj.description[:100] + "..." if obj.description else ""
+
+
+class ReviewRatingSerializer(serializers.ModelSerializer):
+    username = serializers.CharField(source='user.username', read_only=True)
+    class Meta:
+        model = ReviewRating
+        fields = ['username', 'rating', 'description', 'after_service_photo', 'created_date']
