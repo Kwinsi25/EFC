@@ -1,6 +1,6 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework import status
+from rest_framework import status,permissions
 from .models import Category
 from .serializers import *
 from django.shortcuts import get_object_or_404
@@ -13,7 +13,7 @@ class CategoryListCreateView(APIView):
     """
     def get(self, request):
         categories = Category.objects.all().order_by('-created_date')
-        serializer = CategorySerializer(categories, many=True)
+        serializer = CategorySerializer(categories, many=True,context={'request': request})
         return Response({"status": 200, "message": "Categories fetched", "data": serializer.data})
 
     def post(self, request):
@@ -32,7 +32,7 @@ class CategoryDetailView(APIView):
     """
     def get(self, request, category_id):
         category = get_object_or_404(Category, id=category_id)
-        serializer = CategorySerializer(category)
+        serializer = CategorySerializer(category, context={'request': request})
         return Response({"status": 200, "message": "Category retrieved", "data": serializer.data})
 
     def patch(self, request, category_id):
@@ -56,7 +56,7 @@ class SubCategoryListCreateView(APIView):
     """
     def get(self, request):
         subcategories = SubCategory.objects.all().order_by('-created_date')
-        serializer = SubCategorySerializer(subcategories, many=True)
+        serializer = SubCategorySerializer(subcategories, many=True, context={'request': request})
         return Response({
             "status": 200,
             "message": "Subcategories fetched successfully",
@@ -87,7 +87,7 @@ class SubCategoryDetailView(APIView):
     """
     def get(self, request, subcategory_id):
         subcategory = get_object_or_404(SubCategory, id=subcategory_id)
-        serializer = SubCategorySerializer(subcategory)
+        serializer = SubCategorySerializer(subcategory, context={'request': request})
         return Response({
             "status": 200,
             "message": "Subcategory retrieved",
@@ -203,7 +203,7 @@ class SubCategorySearchView(APIView):
             )
 
             if services.exists():
-                serializer = SubCategorySerializer(services, many=True)
+                serializer = SubCategorySerializer(services, many=True, context={'request': request})
                 return Response({
                     "status": 200,
                     "message": "Search result fetched successfully",
@@ -240,7 +240,8 @@ class ServiceCardListView(APIView):
                 "data": []
             }, status=status.HTTP_404_NOT_FOUND)
 
-        serializer = ServiceCardSerializer(services, many=True)
+        serializer = ServiceCardSerializer(services, many=True, context={'request': request})
+
         return Response({
             "status": 200,
             "message": "Service cards fetched successfully",
@@ -285,3 +286,55 @@ class SubCategoryFullDetailView(APIView):
             "message": "Service detail fetched successfully",
             "data": response_data
         }, status=200)
+    
+class UploadAfterServicePhotoView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        booking_id = request.data.get("booking_id")
+        photo = request.FILES.get("after_service_photo")
+
+        if not booking_id or not photo:
+            return Response({"error": "booking_id and after_service_photo are required."}, status=400)
+
+        try:
+            booking = ServiceBook.objects.get(id=booking_id)
+            review, created = ReviewRating.objects.get_or_create(
+                service=booking.service,
+                electrician=booking.assigned_technician,
+                user=booking.user,
+                defaults={
+                    'rating': 1  # Temporary default (can be overwritten later)
+                }
+            )
+            review.after_service_photo = photo
+            review.save()
+            return Response({"message": "Photo uploaded successfully."}, status=201)
+        except ServiceBook.DoesNotExist:
+            return Response({"error": "Booking not found."}, status=404)
+
+
+class SubmitReviewRatingView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        serializer = SubmitReviewRatingSerializer(data=request.data)
+        if serializer.is_valid():
+            user_id = request.data.get('user')
+            if not user_id:
+                return Response({'error': 'User ID is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+            try:
+                user = CustomerProfile.objects.get(id=user_id)
+            except CustomerProfile.DoesNotExist:
+                return Response({'error': 'Invalid user ID'}, status=status.HTTP_400_BAD_REQUEST)
+
+            serializer.save(user=user)
+
+            return Response({
+                'message': 'Review submitted successfully',
+                'data': serializer.data
+            }, status=status.HTTP_201_CREATED)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    

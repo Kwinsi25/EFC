@@ -12,13 +12,18 @@ class Cart(models.Model):
 
 
 class ServiceCart(models.Model):
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('completed', 'Completed')
+
+    ]
     cart = models.ForeignKey(Cart, on_delete=models.CASCADE, related_name='services')
     service = models.ForeignKey(SubCategory, on_delete=models.CASCADE)
-    num_of_tech = models.IntegerField()
-    qty = models.IntegerField()
-    price = models.FloatField()
-    total_price = models.FloatField()
-    status = models.CharField(max_length=20, default='pending')  # pending, complete
+    num_of_tech = models.IntegerField(default=1)
+    qty = models.IntegerField(default=1)
+    price = models.FloatField(default=0.0)
+    total_price = models.FloatField(default=0.0)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES ,default='pending')  # pending, complete
     created_date = models.DateTimeField(auto_now_add=True)
     updated_date = models.DateTimeField(auto_now=True)
 
@@ -27,10 +32,17 @@ class ServiceCart(models.Model):
 
 
 class ServiceBook(models.Model):
+    STATUS_CHOICES = [
+        ('assign', 'Assigned'),
+        ('arriving', 'Arriving'),
+        ('complete', 'Complete'),
+        ('cancel', 'Cancel')
+
+    ]
     user = models.ForeignKey(CustomerProfile, on_delete=models.CASCADE, related_name='bookings')
     service = models.ForeignKey(SubCategory, on_delete=models.CASCADE)
-    status = models.CharField(max_length=20)  # assigned, arriving, complete, cancel
-    technician_required = models.IntegerField()
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES , default='assign')  # assigned, arriving, complete, cancel
+    technician_required = models.IntegerField(default=1)
     assigned_technician = models.ForeignKey(CustomerProfile, on_delete=models.SET_NULL, null=True, blank=True, related_name='assigned_jobs')
     is_agency_booking = models.BooleanField(default=False)
     assigned_agency = models.ForeignKey(CustomerProfile, on_delete=models.SET_NULL, null=True, blank=True, related_name='agency_bookings')

@@ -1,8 +1,10 @@
 from django.db import models
 from Accounts.models import CustomerProfile
+from django.core.validators import MinValueValidator, MaxValueValidator
 
 class Category(models.Model):
-    category_name = models.CharField(max_length=100)
+    category_name = models.CharField(max_length=100,blank=False, null=False, unique=True)
+    image = models.ImageField(upload_to='category_images/', blank=True, null=True)
     created_date = models.DateTimeField(auto_now_add=True)
     updated_date = models.DateTimeField(auto_now=True)
 
@@ -11,14 +13,15 @@ class Category(models.Model):
 
 
 class SubCategory(models.Model):  # This is your "Service or sub_category"
-    name = models.CharField(max_length=100)
+    name = models.CharField(max_length=100,blank=False, null=False)
     category = models.ForeignKey(Category, on_delete=models.CASCADE, related_name='subcategories')
-    description = models.TextField()
+    description = models.TextField(blank=False, null=False)
     cover_image = models.ImageField(upload_to='service_covers/', blank=True, null=True)
-    section = models.CharField(max_length=50)  # most, premium, new, nearby
-    steps = models.TextField()
-    faqs = models.TextField()
-    price = models.CharField(max_length=50)
+    image = models.ImageField(upload_to='subcategory_image/', blank=True, null=True)
+    section = models.CharField(max_length=50,blank=False, null=False)  # most, premium, new, nearby
+    steps = models.TextField(blank=False, null=False)
+    faqs = models.TextField(blank=False, null=False)
+    price = models.CharField(max_length=50,blank=False, null=False)
     created_date = models.DateTimeField(auto_now_add=True)
     updated_date = models.DateTimeField(auto_now=True)
 
@@ -28,9 +31,9 @@ class SubCategory(models.Model):  # This is your "Service or sub_category"
 
 class Step(models.Model):
     service = models.ForeignKey(SubCategory, on_delete=models.CASCADE, related_name='service_steps')
-    step_number = models.IntegerField()
-    title = models.CharField(max_length=100)
-    description = models.TextField()
+    step_number = models.IntegerField( blank=False, null=False)
+    title = models.CharField(max_length=100,blank=False, null=False)
+    description = models.TextField(blank=False, null=False)
     created_date = models.DateTimeField(auto_now_add=True)
     updated_date = models.DateTimeField(auto_now=True)
 
@@ -48,7 +51,7 @@ class ReviewRating(models.Model):
     user = models.ForeignKey(CustomerProfile, on_delete=models.CASCADE, related_name='reviews_given')
     service = models.ForeignKey(SubCategory, on_delete=models.SET_NULL, null=True, blank=True)
     electrician = models.ForeignKey(CustomerProfile, on_delete=models.SET_NULL, null=True, blank=True, related_name='reviews_received')
-    rating = models.IntegerField()
+    rating = models.IntegerField(validators=[MinValueValidator(1), MaxValueValidator(5)], blank=False, null=False)
     description = models.TextField(blank=True, null=True)
     after_service_photo = models.ImageField(upload_to='review_photos/', blank=True, null=True)
     is_approved = models.BooleanField(default=False)
