@@ -11,7 +11,7 @@ from django.shortcuts import get_object_or_404
 from .serializers import *
 from rest_framework.parsers import MultiPartParser, FormParser
 
-#Login API
+# #Login API
 class OTPLoginView(APIView):
     """
     Login API using username, email, and mobile.
@@ -316,3 +316,4 @@ class UserDetailView(APIView):
             "status": 200,
             "message": "User deleted successfully"
         })
+

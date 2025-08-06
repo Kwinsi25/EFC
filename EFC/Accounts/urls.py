@@ -10,5 +10,5 @@ urlpatterns = [
     path('address/<int:address_id>/delete/', DeleteAddressView.as_view()),
     path("register/", CreateUserProfileView.as_view(), name="register-user"),
     path("profile/<int:user_id>/", UserDetailView.as_view(), name="user-detail"),
-
+    
 ]

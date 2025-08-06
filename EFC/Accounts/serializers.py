@@ -29,3 +29,5 @@ class CustomerProfileSerializer(serializers.ModelSerializer):
             'is_verified', 'wallet_balance', 'is_blocked', 'blocked_reason',
             'profile_image', 'created_date', 'updated_date'
         ]
+
+
