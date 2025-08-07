@@ -22,16 +22,25 @@ from reportlab.lib import colors
 from io import BytesIO
 from datetime import datetime
 from django.http import FileResponse
+import random,os
+from django.conf import settings
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
+from django.http import FileResponse, Http404
+from Services.models import *
+# from .models import Cart, ServiceBook, Address  # adjust import paths as needed
 
 
 class AddToCartView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
     def post(self, request):
-        user_id = request.data.get("user_id")
+        # user_id = request.data.get("user_id")
         service_id = request.data.get("service")
         qty = int(request.data.get("qty", 1))
         num_of_tech = int(request.data.get("num_of_tech", 1))
 
-        user = get_object_or_404(CustomerProfile, id=user_id)
+        # user = get_object_or_404(CustomerProfile, id=user_id)
+        user = request.user
         service = get_object_or_404(SubCategory, id=service_id)
         price = float(service.price)
 
@@ -52,9 +61,10 @@ class AddToCartView(APIView):
         
 
 class GetCartView(APIView):
+    permission_classes = [permissions.IsAuthenticated]  # Ensure token is required
+
     def get(self, request):
-        user_id = request.GET.get("user_id")
-        user = get_object_or_404(CustomerProfile, id=user_id)
+        user = request.user  # ✅ Authenticated user from token
         cart = Cart.objects.filter(user=user).first()
 
         if not cart:
@@ -78,8 +88,19 @@ class GetCartView(APIView):
         })
     
 class UpdateCartItemView(APIView):
+    permission_classes = [permissions.IsAuthenticated]  #Require JWT token
+
     def patch(self, request, item_id):
+        user = request.user  # Get user from token
+
         item = get_object_or_404(ServiceCart, id=item_id)
+
+        # 🔒 Ensure the item belongs to the user's cart
+        if item.cart.user != user:
+            return Response({
+                "status": 403,
+                "message": "You do not have permission to update this item"
+            }, status=403)
 
         qty = request.data.get("qty", item.qty)
         num_of_tech = request.data.get("num_of_tech", item.num_of_tech)
@@ -95,21 +116,32 @@ class UpdateCartItemView(APIView):
             "data": ServiceCartSerializer(item).data
         })
 
-
 class DeleteCartItemView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
     def delete(self, request, item_id):
+        user = request.user  #User from token
+
         item = get_object_or_404(ServiceCart, id=item_id)
+
+        #Ensure the cart item belongs to the authenticated user
+        if item.cart.user != user:
+            return Response({
+                "status": 403,
+                "message": "You do not have permission to delete this item"
+            }, status=403)
+
         item.delete()
         return Response({
             "status": 200,
             "message": "Cart item removed"
         })
 
-
 class ClearCartView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
     def delete(self, request):
-        user_id = request.GET.get("user_id")
-        user = get_object_or_404(CustomerProfile, id=user_id)
+        user = request.user  # 🔐 User from token
         cart = Cart.objects.filter(user=user).first()
 
         if cart:
@@ -118,65 +150,16 @@ class ClearCartView(APIView):
         return Response({
             "status": 200,
             "message": "Cart cleared"
-        })
-    
+        })    
 
-class CheckoutView(APIView):
-    def post(self, request):
-        user_id = request.data.get("user_id")
-        address_id = request.data.get("address_id")
-        payment_method = request.data.get("method")  # UPI, COD, etc.
-        upi = request.data.get("upi", "")
-        received_by = request.data.get("received_by", "platform")
-
-        user = get_object_or_404(CustomerProfile, id=user_id)
-        address = get_object_or_404(Address, id=address_id)
-        cart = Cart.objects.filter(user=user).first()
-
-        if not cart or not cart.services.exists():
-            return Response({"status": 400, "message": "Cart is empty"}, status=400)
-
-        bookings = []
-        total_amount = 0
-
-        for item in cart.services.all():
-            booking = ServiceBook.objects.create(
-                user=user,
-                service=item.service,
-                technician_required=item.num_of_tech,
-                status='assign',
-                is_scheduled=False
-            )
-            total_amount += item.total_price
-            bookings.append(booking)
-
-        # Save Payment
-        Payment.objects.create(
-            order=bookings[0],  
-            amount=total_amount,
-            upi=upi,
-            method=payment_method,
-            received_by=received_by,
-            bill_requested=False
-        )
-
-        # Clear the cart
-        cart.services.all().delete()
-
-        return Response({
-            "status": 200,
-            "message": "Booking successful",
-            "data": {
-                "total_amount": total_amount,
-                "payment_method": payment_method,
-                "bookings": [b.id for b in bookings]
-            }
-        })
-    
 class CheckoutSummaryView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
     def get(self, request):
-        user_id = request.GET.get("user_id")
-        user = get_object_or_404(CustomerProfile, id=user_id)
+        # user_id = request.GET.get("user_id")
+        # user = get_object_or_404(CustomerProfile, id=user_id)
+        user = request.user
+
         cart = Cart.objects.filter(user=user).first()
 
         if not cart or not cart.services.exists():
@@ -211,10 +194,299 @@ class CheckoutSummaryView(APIView):
             }
         })
     
+
+class CheckoutView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+        cart = Cart.objects.filter(user=user).first()
+    
+        if not cart or not cart.services.exists():
+            return Response({"status": 400, "message": "Cart is empty"}, status=400)
+
+        # Get default address
+        default_address = Address.objects.filter(user=user, is_default=True).first()
+        if not default_address:
+            return Response({"status": 400, "message": "No default address found"}, status=400)
+
+        bookings = []
+        total_amount = 0
+        assigned_count = 0
+
+        for item in cart.services.all():
+            service_name = item.service.name.strip().lower()
+
+            # Step 1: Try within 3km
+            electrician = self.find_matching_electrician(service_name, km_limit=3)
+
+            # Step 2: If not found, try within 5km
+            if not electrician:
+                electrician = self.find_matching_electrician(service_name, km_limit=5)
+
+            # ✅ Set status based on assignment
+            booking_status = 'assign' if electrician else 'pending'
+
+            # Generate OTP
+            otp = str(random.randint(1000, 9999))
+
+            booking = ServiceBook.objects.create(
+                user=user,
+                service=item.service,
+                technician_required=item.num_of_tech,
+                status=booking_status,
+                is_scheduled=False,
+                service_start_otp=otp,
+                otp_generated_at=timezone.now(),
+                assigned_technician=electrician if electrician else None
+            )
+
+            total_amount += item.total_price
+
+            if electrician:
+                assigned_count += 1
+                msg = f"Electrician '{electrician.username}' assigned."
+            else:
+                msg = "No electrician found within 5km."
+
+            bookings.append({
+                "id": booking.id,
+                "service": item.service.name,
+                "otp": otp,
+                "assigned_technician": electrician.username if electrician else None,
+                "assignment_message": msg,
+                "status": booking_status
+            })
+
+        # Clear cart
+        cart.services.all().delete()
+
+        if assigned_count == 0:
+            final_msg = "Booking placed, but no electrician found within 5km. Our team will contact you."
+        else:
+            final_msg = "Booking confirmed"
+
+        return Response({
+            "status": 200,
+            "message": final_msg,
+            "data": {
+                "total_amount": total_amount,
+                "bookings": bookings,
+                "default_address": {
+                    "label": default_address.label,
+                    "address": default_address.address,
+                    "city": default_address.city,
+                    "state": default_address.state,
+                    "pincode": default_address.pincode,
+                }
+            }
+        })
+
+    def find_matching_electrician(self, service_name, km_limit):
+        electricians = CustomerProfile.objects.filter(
+            role='electrician'
+        )
+
+        for electrician in electricians:
+            if electrician.service_skill:
+                skills = [s.strip().lower() for s in electrician.service_skill.split(',')]
+                if any(service_name in skill or skill in service_name for skill in skills):
+                    if electrician.service_km and electrician.service_km <= km_limit:
+                        return electrician
+
+        return None
+
+
+class VerifyOtpView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+        booking_id = request.data.get("booking_id")
+        entered_otp = request.data.get("otp")
+        print(user, booking_id, entered_otp)
+        if not booking_id or not entered_otp:
+            return Response({"status": 400, "message": "Booking ID and OTP are required"}, status=400)
+
+        try:
+            booking = ServiceBook.objects.get(id=booking_id, assigned_technician=user)
+        except ServiceBook.DoesNotExist:
+            return Response({"status": 404, "message": "Booking not found or not assigned to you"}, status=404)
+
+        if booking.service_start_otp != entered_otp:
+            return Response({"status": 401, "message": "Invalid OTP"}, status=401)
+
+        # OTP is valid
+        booking.otp_verified_at = timezone.now()
+        booking.otp_verified_by = user
+        booking.status = "arriving"
+        booking.save()
+
+        return Response({
+            "status": 200,
+            "message": "OTP verified successfully. Status updated to arriving.",
+            "data": {
+                "booking_id": booking.id,
+                "verified_at": booking.otp_verified_at,
+                "verified_by": user.username,
+                "status": booking.status
+            }
+        })
+
+class QuotationDecisionView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, booking_id):
+        user = request.user
+        decision = request.data.get('user_approved')  # Expecting true/false from frontend
+
+        if decision is None:
+            return Response({"status": 400, "message": "'user_approved' field is required (true or false)."}, status=400)
+
+        try:
+            booking = ServiceBook.objects.get(id=booking_id, user=user)
+        except ServiceBook.DoesNotExist:
+            return Response({"status": 404, "message": "Booking not found or access denied."}, status=404)
+
+        if not booking.otp_verified_at:
+            return Response({"status": 403, "message": "OTP not yet verified for this booking."}, status=403)
+
+        # Convert decision to boolean safely
+        decision_bool = str(decision).lower() in ['true', '1', 'yes']
+
+        if decision_bool:  # Approved
+            base_price = getattr(booking.service, 'price', 0.0)
+            print(type(base_price),"-----------")
+            electrician_charge = 100.0  # or dynamic
+            total_amount = float(base_price) + electrician_charge
+
+            booking.action = 'approve'
+            booking.job_started_at = timezone.now()
+            booking.quatation_amt = total_amount
+            booking.save()
+
+            return Response({
+                "status": 200,
+                "message": f"Quotation approved. Job has officially started. Amount: ₹{total_amount}",
+                "quotation_amount": total_amount,
+                "job_started_at": booking.job_started_at
+            })
+
+        else:  # Rejected
+            booking.action = 'reject'
+            booking.save()
+
+            return Response({
+                "status": 200,
+                "message": "We understand the quotation was not approved. No worries – you may reschedule or contact us for further support.",
+                "action": "Quotation rejected"
+            })
+
+
+class JobCompleteView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]  # for photo upload
+
+    def post(self, request, booking_id):
+        user = request.user
+
+        try:
+            booking = ServiceBook.objects.get(id=booking_id, assigned_technician=user)
+        except ServiceBook.DoesNotExist:
+            return Response({"status": 404, "message": "Booking not found or unauthorized"}, status=404)
+
+        # Ensure job has started timestamp
+        if not booking.job_started_at:
+            booking.job_started_at = timezone.now()
+
+        # Set status to complete (compulsory)
+        booking.status = 'complete'
+
+        # Optional inputs
+        comment = request.data.get('comment')
+        photo = request.FILES.get('photo')
+        is_bill_required = request.data.get('is_bill_required')
+
+        if comment:
+            booking.comment = comment
+
+        if photo:
+            booking.photo = photo
+
+        bill_msg = "Bill not requested."
+
+        if str(is_bill_required).lower() == 'true':
+            if not booking.is_bill_generated:
+                # Generate PDF
+                pdf_filename = f"booking_{booking.id}.pdf"
+                bills_dir = os.path.join(settings.MEDIA_ROOT, 'bills')
+                os.makedirs(bills_dir, exist_ok=True)
+                pdf_path = os.path.join(bills_dir, pdf_filename)
+
+                c = canvas.Canvas(pdf_path, pagesize=letter)
+                c.drawString(100, 750, f"Bill for Booking #{booking.id}")
+                c.drawString(100, 730, f"User: {booking.user.username}")
+                c.drawString(100, 710, f"Service: {booking.service.name}")
+                c.drawString(100, 690, f"Technician: {booking.assigned_technician.username}")
+                c.drawString(100, 670, f"Date: {timezone.now().strftime('%Y-%m-%d')}")
+                c.drawString(100, 650, f"Status: Completed")
+                c.drawString(100, 630, "This is a system-generated bill.")
+                c.save()
+
+                # Save URL path and update flag
+                booking.pdf_url = f"bills/{pdf_filename}"
+                booking.is_bill_generated = True
+                bill_msg = "Bill generated and saved successfully."
+            else:
+                bill_msg = "Bill was already generated."
+
+        booking.save()
+
+        return Response({
+            "status": 200,
+            "message": "Job marked as complete.",
+            "bill_status": bill_msg,
+            "data": {
+                "booking_id": booking.id,
+                "status": booking.status,
+                "job_started_at": booking.job_started_at,
+                "comment": comment or "No comment provided",
+                "photo_uploaded": bool(photo),
+                "bill_pdf_url": booking.pdf_url if booking.is_bill_generated else None
+            }
+        })
+    
+
+class DownloadBillPDFView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, booking_id):
+        user = request.user
+
+        try:
+            booking = ServiceBook.objects.get(id=booking_id, user=user)
+        except ServiceBook.DoesNotExist:
+            return Response({"status": 404, "message": "Booking not found or unauthorized"}, status=404)
+
+        if booking.status != 'complete' or not booking.is_bill_generated:
+            return Response({"status": 400, "message": "Bill not available for this booking yet."}, status=400)
+
+        if not booking.pdf_url:
+            return Response({"status": 400, "message": "PDF URL not found in record."}, status=400)
+
+        pdf_path = os.path.join(settings.MEDIA_ROOT, booking.pdf_url)
+        if not os.path.exists(pdf_path):
+            raise Http404("PDF file not found on server.")
+
+        return FileResponse(open(pdf_path, 'rb'), content_type='application/pdf', filename=os.path.basename(pdf_path))
+    
 class BookingHistoryView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
     def get(self, request):
-        user_id = request.GET.get("user_id")
-        user = get_object_or_404(CustomerProfile, id=user_id)
+        # user_id = request.GET.get("user_id")
+        # user = get_object_or_404(CustomerProfile, id=user_id)
+        user = request.user
 
         bookings = ServiceBook.objects.filter(user=user).order_by('-created_date')
         serializer = BookingListSerializer(bookings, many=True, context={'request': request})
@@ -226,6 +498,8 @@ class BookingHistoryView(APIView):
         })
     
 class BookingDetailView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
     def get(self, request, booking_id):
         booking = get_object_or_404(ServiceBook, id=booking_id)
 
@@ -248,275 +522,3 @@ class BookingDetailView(APIView):
             "data": data
         })
 
-
-class AssignedTechnicianView(APIView):
-    """
-    GET: View assigned technician details
-    """
-    def get(self, request, booking_id):
-        booking = get_object_or_404(ServiceBook, id=booking_id)
-        tech = booking.assigned_technician
-
-        if not tech:
-            return Response({
-                "status": 404,
-                "message": "Technician not assigned yet",
-                "data": {}
-            }, status=404)
-
-        rating = tech.reviews_received.filter(is_approved=True).aggregate(
-            avg=models.Avg('rating'))['avg'] or 0
-
-        data = {
-            "id": tech.id,
-            "name": tech.username,
-            "photo": request.build_absolute_uri(tech.profile_image.url) if tech.profile_image else None,
-            "type": "Agency" if tech.role == "agency" else "Individual",
-            "rating": round(rating, 1),
-            "contact": tech.mobile if tech.role != "admin" else None  # optional
-        }
-
-        return Response({
-            "status": 200,
-            "message": "Technician info fetched",
-            "data": data
-        })
-
-class UpdateBookingStatusView(APIView):
-    """
-    PATCH: Update booking status to assigned, arriving, complete, cancel
-    """
-    def patch(self, request, booking_id):
-        booking = get_object_or_404(ServiceBook, id=booking_id)
-        new_status = request.data.get("status")
-
-        valid_status = ['assign', 'arriving', 'complete', 'cancel']
-        if new_status not in valid_status:
-            return Response({
-                "status": 400,
-                "message": "Invalid status. Use: assign, arriving, complete, cancel"
-            }, status=400)
-
-        booking.status = new_status
-        booking.save()
-
-        return Response({
-            "status": 200,
-            "message": f"Booking status updated to {new_status}"
-        })
-
-class BookingStatusView(APIView):
-    def get(self, request, booking_id):
-        booking = get_object_or_404(ServiceBook, id=booking_id)
-        return Response({
-            "status": 200,
-            "message": "Booking status fetched",
-            "data": {
-                "booking_id": booking.id,
-                "status": booking.status
-            }
-        })
-
-
-class AssignTechnicianView(APIView):
-    """
-    PATCH: Assign a technician manually to a booking
-    Body:
-    {
-        "technician_id": 5
-    }
-    """
-    def patch(self, request, booking_id):
-        technician_id = request.data.get("technician_id")
-        if not technician_id:
-            return Response({
-                "status": 400,
-                "message": "technician_id is required"
-            }, status=400)
-
-        booking = get_object_or_404(ServiceBook, id=booking_id)
-        technician = get_object_or_404(CustomerProfile, id=technician_id, role='electrician')
-
-        booking.assigned_technician = technician
-        booking.save()
-
-        return Response({
-            "status": 200,
-            "message": f"Technician '{technician.username}' assigned to booking #{booking.id}"
-        })
-    
-class MarkTechnicianArrivedView(APIView):
-    """
-    PATCH: Technician marks arrival at user's location
-    """
-    def patch(self, request, booking_id):
-        booking = get_object_or_404(ServiceBook, id=booking_id)
-
-        if booking.status != "arriving":
-            return Response({
-                "status": 400,
-                "message": f"Technician must be in 'arriving' state. Current: {booking.status}"
-            })
-
-        booking.arrived_at = timezone.now()
-        booking.save()
-
-        return Response({
-            "status": 200,
-            "message": "Technician marked as arrived"
-        })
-
-class VerifyServiceOTPView(APIView):
-    """
-    PATCH: Verify OTP to start service
-    Body: { "otp": "123456", "verified_by": 7 }
-    """
-    def patch(self, request, booking_id):
-        entered_otp = request.data.get("otp")
-        verified_by = request.data.get("verified_by")
-
-        booking = get_object_or_404(ServiceBook, id=booking_id)
-
-        if not booking.service_start_otp:
-            return Response({"status": 400, "message": "OTP not generated for this booking"})
-
-        if str(entered_otp) != str(booking.service_start_otp):
-            return Response({"status": 400, "message": "Invalid OTP"})
-
-        booking.otp_verified_at = timezone.now()
-        booking.otp_verified_by_id = verified_by
-        booking.job_started_at = timezone.now()
-        booking.status = "complete"  # or "in-progress" if you want that in between
-        booking.save()
-
-        return Response({
-            "status": 200,
-            "message": "OTP verified, service started"
-        })
-
-class MarkJobCompleteView(APIView):
-    """
-    PATCH: Technician marks service as completed
-    Body: {
-        "comment": "AC fixed",
-        "photo": <image file>
-    }
-    """
-    parser_classes = [MultiPartParser, FormParser]
-
-    def patch(self, request, booking_id):
-        booking = get_object_or_404(ServiceBook, id=booking_id)
-
-        comment = request.data.get("comment")
-        photo = request.FILES.get("photo")
-
-        booking.comment = comment
-        if photo:
-            booking.photo = photo
-        booking.status = "complete"
-        booking.save()
-
-        return Response({
-            "status": 200,
-            "message": "Service marked as completed"
-        })
-
-
-class GenerateBillView(APIView):
-    def post(self, request, booking_id):
-        booking = get_object_or_404(ServiceBook, id=booking_id)
-        charges = request.data.get("charges", {})
-
-        # Get user info
-        user = booking.user
-        address_obj = Address.objects.filter(user=user, is_default=True).first()
-
-        # Get service info
-        service = booking.service
-        technician = booking.assigned_technician
-
-        # Compose PDF
-        buffer = BytesIO()
-        doc = SimpleDocTemplate(buffer, pagesize=A4)
-        styles = getSampleStyleSheet()
-        elements = []
-
-        # Header
-        elements.append(Paragraph("INVOICE / SERVICE BILL", styles['Title']))
-        elements.append(Spacer(1, 12))
-        elements.append(Paragraph(f"Date: {datetime.now().strftime('%d-%m-%Y %H:%M')}", styles['Normal']))
-        elements.append(Spacer(1, 12))
-
-        # Customer Info
-        elements.append(Paragraph("<b>Customer Details:</b>", styles['Heading4']))
-        elements.append(Paragraph(f"Name: {user.username}", styles['Normal']))
-        elements.append(Paragraph(f"Mobile: {user.mobile}", styles['Normal']))
-        if address_obj:
-            elements.append(Paragraph(f"Address: {address_obj.address}, {address_obj.city}, {address_obj.state} - {address_obj.pincode}", styles['Normal']))
-        else:
-            elements.append(Paragraph("Address: Not available", styles['Normal']))
-        elements.append(Spacer(1, 12))
-
-        # Service Info
-        elements.append(Paragraph("<b>Service Details:</b>", styles['Heading4']))
-        elements.append(Paragraph(f"Service: {service.name}", styles['Normal']))
-        elements.append(Paragraph(f"Technicians Required: {booking.technician_required}", styles['Normal']))
-        elements.append(Paragraph(f"Quantity: 1", styles['Normal']))  # Assuming single unit per ServiceBook
-        if technician:
-            elements.append(Paragraph(f"Assigned Technician: {technician.username}", styles['Normal']))
-        elements.append(Spacer(1, 12))
-
-        # Charges
-        elements.append(Paragraph("<b>Charges:</b>", styles['Heading4']))
-        charge_data = [[key.replace("_", " ").title(), f"₹{value}"] for key, value in charges.items()]
-        table = Table(charge_data, hAlign='LEFT')
-        table.setStyle(TableStyle([
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
-            ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
-            ('FONTNAME', (0, 0), (-1, -1), 'Helvetica')
-        ]))
-        elements.append(table)
-        elements.append(Spacer(1, 24))
-
-        # Footer
-        elements.append(Paragraph("Thank you for choosing Estate Fix & Care!", styles['Normal']))
-        elements.append(Paragraph("For support, contact: support@efc.com", styles['Normal']))
-
-        # Build and save
-        doc.build(elements)
-        pdf = buffer.getvalue()
-        buffer.close()
-
-        file_path = f"bills/booking_{booking.id}.pdf"
-        default_storage.save(file_path, ContentFile(pdf))
-
-        booking.pdf_url = file_path
-        booking.is_bill_generated = True
-        booking.save()
-
-        return Response({
-            "status": 200,
-            "message": "Bill generated successfully",
-            "pdf_url": file_path
-        })
-       
-class DownloadBillView(APIView):
-    def get(self, request, booking_id):
-        booking = get_object_or_404(ServiceBook, id=booking_id)
-        if not booking.pdf_url or not default_storage.exists(booking.pdf_url):
-            return Response({"status": 404, "message": "Bill not found"}, status=404)
-
-        file = default_storage.open(booking.pdf_url, 'rb')
-        return FileResponse(file, as_attachment=True, filename=f"Booking_{booking_id}_Bill.pdf")
-    
-class OrderHistoryView(APIView):
-    permission_classes = [permissions.AllowAny]  # No token required for now
-
-    def get(self, request):
-        user_id = request.query_params.get('user')
-        if not user_id:
-            return Response({'error': 'User ID is required'}, status=400)
-
-        bookings = ServiceBook.objects.filter(user_id=user_id).order_by('-scheduled_date_time')
-        serializer = OrderHistorySerializer(bookings, many=True)
-        return Response(serializer.data)

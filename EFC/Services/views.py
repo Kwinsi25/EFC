@@ -5,18 +5,25 @@ from .models import Category
 from .serializers import *
 from django.shortcuts import get_object_or_404
 from django.db.models import Q,Avg
+from Accounts.auth_utils import get_authenticated_admin
+from rest_framework.permissions import IsAuthenticated
+
 
 class CategoryListCreateView(APIView):
-    """
-    GET: List all categories
-    POST: Create a new category
-    """
+    permission_classes = [IsAuthenticated]  # ✅ Require JWT-authenticated user
+
     def get(self, request):
         categories = Category.objects.all().order_by('-created_date')
-        serializer = CategorySerializer(categories, many=True,context={'request': request})
+        serializer = CategorySerializer(categories, many=True, context={'request': request})
         return Response({"status": 200, "message": "Categories fetched", "data": serializer.data})
 
     def post(self, request):
+        # ✅ Allow only if admin
+        if not isinstance(request.user, CustomerProfile) or request.user.role != 'admin':
+            return Response({
+                "detail": "Unauthorized: Admin access required"
+            }, status=401)
+
         serializer = CategorySerializer(data=request.data)
         if serializer.is_valid():
             serializer.save()

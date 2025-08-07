@@ -10,8 +10,37 @@ from rest_framework.permissions import AllowAny
 from django.shortcuts import get_object_or_404
 from .serializers import *
 from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.permissions import IsAuthenticated
+
+from rest_framework_simplejwt.tokens import RefreshToken
+
+class RegisterAPIView(APIView):
+    def post(self, request):
+        serializer = RegisterSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response({
+                "status": 201,
+                "message": "User registered successfully",
+                "data": serializer.data
+            }, status=status.HTTP_201_CREATED)
+        return Response({
+            "status": 400,
+            "message": "Registration failed",
+            "errors": serializer.errors
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+
 
 # #Login API
+def get_tokens_for_user(user):
+    refresh = RefreshToken.for_user(user)
+    return {
+        'refresh': str(refresh),
+        'access': str(refresh.access_token),
+    }
+
+
 class OTPLoginView(APIView):
     """
     Login API using username, email, and mobile.
@@ -81,19 +110,26 @@ class OTPLoginView(APIView):
         cached_otp = cache.get(f"otp_{mobile}")
         if cached_otp == otp:
             cache.delete(f"otp_{mobile}")
-            
+            user = CustomerProfile.objects.get(username=username, email=email, mobile=mobile)
+
             #Save login log into systemLog
             SystemLog.objects.create(
                 type="login",
-                performed_by=user,
+                performed_by=user,  # ✅ correct
                 remark=f"Login from {device_type} using {browser} on {os_name}"
             )
+
+            # Generate JWT token
+            tokens = get_tokens_for_user(user)
+
             return Response({
                 "status": 200,
                 "message": "Login success",
                 "data": {
                     "user_id": user.id,
                     "username": user.username,
+                    "access_token": tokens['access'],
+                    "refresh_token": tokens['refresh'],
                     "device_type": device_type,
                     "os": os_name,
                     "browser": browser
@@ -143,33 +179,33 @@ class DeviceInfoView(APIView):
         }, status=200)
         
 # Add new address
+from django.contrib.auth.models import AnonymousUser
+
 class AddAddressView(APIView):
-    """
-    Add a new service address for a user.
-    """
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        user_id = request.data.get('user_id')
-        user = get_object_or_404(CustomerProfile, id=user_id)
+        user = request.user  # ✅ will now be CustomerProfile instance due to custom auth
 
         serializer = AddressSerializer(data=request.data)
         if serializer.is_valid():
+            # Set existing default address to False
             if serializer.validated_data.get('is_default', False):
                 Address.objects.filter(user=user).update(is_default=False)
+
             serializer.save(user=user)
             return Response({
                 "status": 200,
                 "message": "Address added successfully",
                 "data": serializer.data
-            }, status=200)
+            }, status=status.HTTP_200_OK)
 
         return Response({
             "status": 400,
             "message": "Invalid data",
             "data": serializer.errors
-        }, status=400)
-
+        }, status=status.HTTP_400_BAD_REQUEST)
+    
 # List addresses
 class ListAddressView(APIView):
     """
@@ -201,26 +237,31 @@ class ListAddressView(APIView):
         
 # Update address
 class UpdateAddressView(APIView):
-    """
-    Update a user's existing saved address.
-    """
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
 
     def patch(self, request, address_id):
         address = get_object_or_404(Address, id=address_id)
-        user = address.user
+
+        # nsure the logged-in user owns this address
+        if address.user != request.user:
+            return Response({
+                "status": 403,
+                "message": "You do not have permission to edit this address.",
+                "data": {}
+            }, status=403)
 
         serializer = AddressSerializer(address, data=request.data, partial=True)
         if serializer.is_valid():
             if serializer.validated_data.get('is_default', False):
-                Address.objects.filter(user=user).exclude(id=address.id).update(is_default=False)
+                Address.objects.filter(user=request.user).exclude(id=address.id).update(is_default=False)
+
             serializer.save()
             return Response({
                 "status": 200,
                 "message": "Address updated successfully",
                 "data": serializer.data
             }, status=200)
-        
+
         return Response({
             "status": 400,
             "message": "Invalid data",

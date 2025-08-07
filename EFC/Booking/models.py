@@ -33,11 +33,16 @@ class ServiceCart(models.Model):
 
 class ServiceBook(models.Model):
     STATUS_CHOICES = [
+        ('pending', 'Pending'),
         ('assign', 'Assigned'),
         ('arriving', 'Arriving'),
         ('complete', 'Complete'),
         ('cancel', 'Cancel')
 
+    ]
+    ACTION_CHOICE = [
+        ('approve', 'Approve'),
+        ('reject', 'Reject')
     ]
     user = models.ForeignKey(CustomerProfile, on_delete=models.CASCADE, related_name='bookings')
     service = models.ForeignKey(SubCategory, on_delete=models.CASCADE)
@@ -57,12 +62,14 @@ class ServiceBook(models.Model):
     accept_at = models.DateTimeField(blank=True, null=True)
     arrived_at = models.DateTimeField(blank=True, null=True)
 
+    quatation_amt = models.FloatField(default=0.0)
     otp_required = models.BooleanField(default=True)
     service_start_otp = models.CharField(max_length=6, blank=True, null=True)
     otp_generated_at = models.DateTimeField(blank=True, null=True)
     otp_verified_at = models.DateTimeField(blank=True, null=True)
     otp_verified_by = models.ForeignKey(CustomerProfile, on_delete=models.SET_NULL, null=True, blank=True, related_name='otp_verified_jobs')
 
+    action = models.CharField(max_length=20, choices=ACTION_CHOICE, default='Approve')  # start, reject
     job_started_at = models.DateTimeField(blank=True, null=True)
     photo = models.ImageField(upload_to='job_photos/', blank=True, null=True)
     comment = models.CharField(max_length=255, blank=True, null=True)

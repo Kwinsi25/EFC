@@ -2,19 +2,55 @@ from rest_framework import serializers
 from Accounts.models import CustomerProfile
 from Accounts.models import Address
 
+
+class RegisterSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CustomerProfile
+        fields = [
+            'username', 'email', 'mobile', 'role',
+            'profile_image', 'experience_year', 'service_skill',
+            'service_km', 'document_type', 'document_file'
+        ]
+
+    def validate_username(self, value):
+        if CustomerProfile.objects.filter(username=value).exists():
+            raise serializers.ValidationError("Username already exists")
+        return value
+
+    def validate_email(self, value):
+        if CustomerProfile.objects.filter(email=value).exists():
+            raise serializers.ValidationError("Email already exists")
+        return value
+
+    def validate_mobile(self, value):
+        if not value.isdigit() or len(value) < 10:
+            raise serializers.ValidationError("Enter a valid mobile number")
+        if CustomerProfile.objects.filter(mobile=value).exists():
+            raise serializers.ValidationError("Mobile number already exists")
+        return value
+
+    def validate_role(self, value):
+        allowed_roles = ['user', 'electrician', 'admin']
+        if value not in allowed_roles:
+            raise serializers.ValidationError("Invalid role")
+        return value
+
+    def validate(self, data):
+        if data.get('role') == 'electrician':
+            required_fields = ['experience_year', 'service_skill', 'service_km']
+            for field in required_fields:
+                if not data.get(field):
+                    raise serializers.ValidationError(
+                        f"{field.replace('_', ' ').capitalize()} is required for electricians"
+                    )
+        return data
+
 class AddressSerializer(serializers.ModelSerializer):
     class Meta:
         model = Address
         fields = [
-            'id',
-            'label',
-            'address',
-            'city',
-            'state',
-            'pincode',
-            'is_default',
-            'created_date',
-            'updated_date'
+            'id', 'label', 'address', 'city', 'state', 'pincode',
+            'is_default', 'created_date', 'updated_date'
         ]
 
 
