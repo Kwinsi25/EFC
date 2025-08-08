@@ -46,3 +46,16 @@ class OrderHistorySerializer(serializers.ModelSerializer):
             'category_name', 'technician_name', 'comment',
             'is_bill_generated', 'pdf_url'
         ]
+
+
+class ServiceBookSerializer(serializers.ModelSerializer):
+    service_name = serializers.CharField(source='service.name', read_only=True)
+    technician_name = serializers.CharField(source='assigned_technician.username', read_only=True)
+
+    class Meta:
+        model = ServiceBook
+        fields = [
+            'id', 'service_name', 'status', 'quatation_amt',
+            'scheduled_date_time', 'job_started_at', 'comment',
+            'technician_name', 'photo', 'updated_date'
+        ]

@@ -1,6 +1,6 @@
 from django.db import models
 from Accounts.models import CustomerProfile
-from Services.models import SubCategory  
+from Services.models import *  
 
 class Cart(models.Model):
     user = models.ForeignKey(CustomerProfile, on_delete=models.CASCADE, related_name='carts')

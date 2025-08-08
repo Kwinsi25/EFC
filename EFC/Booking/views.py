@@ -4,28 +4,14 @@ from rest_framework import status,permissions
 from Accounts.models import CustomerProfile, Address
 from Services.models import SubCategory
 from .models import Cart, ServiceCart, ServiceBook
-from Wallet.models import Payment
 from .serializers import *
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework.parsers import MultiPartParser, FormParser
-from django.core.files.base import ContentFile
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import getSampleStyleSheet
-from io import BytesIO
-from django.core.files.storage import default_storage
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.lib import colors
-from io import BytesIO
-from datetime import datetime
 from django.http import FileResponse
 import random,os
 from django.conf import settings
 from reportlab.lib.pagesizes import letter
-from reportlab.pdfgen import canvas
 from django.http import FileResponse, Http404
 from Services.models import *
 # from .models import Cart, ServiceBook, Address  # adjust import paths as needed
@@ -262,7 +248,7 @@ class CheckoutView(APIView):
         cart.services.all().delete()
 
         if assigned_count == 0:
-            final_msg = "Booking placed, but no electrician found within 5km. Our team will contact you."
+            final_msg = "Booking confirmed"
         else:
             final_msg = "Booking confirmed"
 
@@ -283,18 +269,24 @@ class CheckoutView(APIView):
         })
 
     def find_matching_electrician(self, service_name, km_limit):
-        electricians = CustomerProfile.objects.filter(
-            role='electrician'
-        )
+        electricians = CustomerProfile.objects.filter(role='electrician')
+
+        service_keywords = [word.strip().lower() for word in service_name.split() if word.strip()]
 
         for electrician in electricians:
             if electrician.service_skill:
-                skills = [s.strip().lower() for s in electrician.service_skill.split(',')]
-                if any(service_name in skill or skill in service_name for skill in skills):
+                skill_keywords = []
+                for skill_phrase in electrician.service_skill.split(','):
+                    words = skill_phrase.strip().lower().split()
+                    skill_keywords.extend(words)
+
+                #Match if ANY service word exists in ANY skill word
+                if any(word in skill_keywords for word in service_keywords):
                     if electrician.service_km and electrician.service_km <= km_limit:
                         return electrician
 
         return None
+
 
 
 class VerifyOtpView(APIView):
@@ -333,6 +325,38 @@ class VerifyOtpView(APIView):
             }
         })
 
+
+class QuotationAmountUpdateView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, booking_id):
+        user = request.user
+
+        booking = get_object_or_404(ServiceBook, id=booking_id)
+
+        # Optional: prevent update if already approved/rejected
+        if booking.action in ['approve', 'reject']:
+            return Response({
+                "status": 403,
+                "message": "Quotation decision already made. Cannot update amount."
+            }, status=403)
+
+        # Calculate quotation amount using service price + electrician charge
+        base_price = getattr(booking.service, 'price', 0.0)
+        electrician_charge = 100.0  # You can make this dynamic later if needed
+        total_amount = float(base_price) + electrician_charge
+
+        booking.quatation_amt = total_amount
+        booking.save()
+
+        return Response({
+            "status": 200,
+            "message": "Quotation amount calculated and saved successfully.",
+            "quotation_amt": total_amount,
+            "base_price": base_price,
+            "electrician_charge": electrician_charge
+        })
+    
 class QuotationDecisionView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -355,20 +379,20 @@ class QuotationDecisionView(APIView):
         decision_bool = str(decision).lower() in ['true', '1', 'yes']
 
         if decision_bool:  # Approved
-            base_price = getattr(booking.service, 'price', 0.0)
-            print(type(base_price),"-----------")
-            electrician_charge = 100.0  # or dynamic
-            total_amount = float(base_price) + electrician_charge
+            # base_price = getattr(booking.service, 'price', 0.0)
+            # print(type(base_price),"-----------")
+            # electrician_charge = 100.0  # or dynamic
+            # total_amount = float(base_price) + electrician_charge
 
             booking.action = 'approve'
             booking.job_started_at = timezone.now()
-            booking.quatation_amt = total_amount
+            # booking.quatation_amt = total_amount
             booking.save()
 
             return Response({
                 "status": 200,
-                "message": f"Quotation approved. Job has officially started. Amount: ₹{total_amount}",
-                "quotation_amount": total_amount,
+                "message": f"Quotation approved. Job has officially started.",
+                # "quotation_amount": total_amount,
                 "job_started_at": booking.job_started_at
             })
 
@@ -385,7 +409,7 @@ class QuotationDecisionView(APIView):
 
 class JobCompleteView(APIView):
     permission_classes = [permissions.IsAuthenticated]
-    parser_classes = [MultiPartParser, FormParser]  # for photo upload
+    parser_classes = [MultiPartParser, FormParser]
 
     def post(self, request, booking_id):
         user = request.user
@@ -393,19 +417,21 @@ class JobCompleteView(APIView):
         try:
             booking = ServiceBook.objects.get(id=booking_id, assigned_technician=user)
         except ServiceBook.DoesNotExist:
-            return Response({"status": 404, "message": "Booking not found or unauthorized"}, status=404)
+            return Response({
+                "status": 404,
+                "message": "Booking not found or unauthorized"
+            }, status=404)
 
-        # Ensure job has started timestamp
+        # Set job start time if not already set
         if not booking.job_started_at:
             booking.job_started_at = timezone.now()
 
-        # Set status to complete (compulsory)
+        # Mark status as complete
         booking.status = 'complete'
 
-        # Optional inputs
+        # Optional comment and photo
         comment = request.data.get('comment')
         photo = request.FILES.get('photo')
-        is_bill_required = request.data.get('is_bill_required')
 
         if comment:
             booking.comment = comment
@@ -413,51 +439,21 @@ class JobCompleteView(APIView):
         if photo:
             booking.photo = photo
 
-        bill_msg = "Bill not requested."
-
-        if str(is_bill_required).lower() == 'true':
-            if not booking.is_bill_generated:
-                # Generate PDF
-                pdf_filename = f"booking_{booking.id}.pdf"
-                bills_dir = os.path.join(settings.MEDIA_ROOT, 'bills')
-                os.makedirs(bills_dir, exist_ok=True)
-                pdf_path = os.path.join(bills_dir, pdf_filename)
-
-                c = canvas.Canvas(pdf_path, pagesize=letter)
-                c.drawString(100, 750, f"Bill for Booking #{booking.id}")
-                c.drawString(100, 730, f"User: {booking.user.username}")
-                c.drawString(100, 710, f"Service: {booking.service.name}")
-                c.drawString(100, 690, f"Technician: {booking.assigned_technician.username}")
-                c.drawString(100, 670, f"Date: {timezone.now().strftime('%Y-%m-%d')}")
-                c.drawString(100, 650, f"Status: Completed")
-                c.drawString(100, 630, "This is a system-generated bill.")
-                c.save()
-
-                # Save URL path and update flag
-                booking.pdf_url = f"bills/{pdf_filename}"
-                booking.is_bill_generated = True
-                bill_msg = "Bill generated and saved successfully."
-            else:
-                bill_msg = "Bill was already generated."
-
         booking.save()
 
         return Response({
             "status": 200,
             "message": "Job marked as complete.",
-            "bill_status": bill_msg,
             "data": {
                 "booking_id": booking.id,
                 "status": booking.status,
                 "job_started_at": booking.job_started_at,
                 "comment": comment or "No comment provided",
-                "photo_uploaded": bool(photo),
-                "bill_pdf_url": booking.pdf_url if booking.is_bill_generated else None
+                "photo_uploaded": bool(photo)
             }
-        })
-    
+        }) 
 
-class DownloadBillPDFView(APIView):
+class DownloadPDFView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request, booking_id):
@@ -466,59 +462,70 @@ class DownloadBillPDFView(APIView):
         try:
             booking = ServiceBook.objects.get(id=booking_id, user=user)
         except ServiceBook.DoesNotExist:
-            return Response({"status": 404, "message": "Booking not found or unauthorized"}, status=404)
-
-        if booking.status != 'complete' or not booking.is_bill_generated:
-            return Response({"status": 400, "message": "Bill not available for this booking yet."}, status=400)
+            return Response({
+                "status": 404,
+                "message": "Booking not found or access denied"
+            }, status=status.HTTP_404_NOT_FOUND)
 
         if not booking.pdf_url:
-            return Response({"status": 400, "message": "PDF URL not found in record."}, status=400)
+            return Response({
+                "status": 400,
+                "message": "PDF not generated for this booking"
+            }, status=status.HTTP_400_BAD_REQUEST)
 
         pdf_path = os.path.join(settings.MEDIA_ROOT, booking.pdf_url)
+
         if not os.path.exists(pdf_path):
-            raise Http404("PDF file not found on server.")
+            return Response({
+                "status": 404,
+                "message": "PDF file not found"
+            }, status=status.HTTP_404_NOT_FOUND)
 
         return FileResponse(open(pdf_path, 'rb'), content_type='application/pdf', filename=os.path.basename(pdf_path))
-    
-class BookingHistoryView(APIView):
+
+
+class PastOrdersView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        # user_id = request.GET.get("user_id")
-        # user = get_object_or_404(CustomerProfile, id=user_id)
         user = request.user
+        past_orders = ServiceBook.objects.filter(user=user, status__in=['complete', 'cancel']).order_by('-updated_date')
 
-        bookings = ServiceBook.objects.filter(user=user).order_by('-created_date')
-        serializer = BookingListSerializer(bookings, many=True, context={'request': request})
-
+        serializer = ServiceBookSerializer(past_orders, many=True)
         return Response({
             "status": 200,
-            "message": "Booking history fetched",
+            "message": "Past bookings retrieved successfully.",
             "data": serializer.data
-        })
+        }, status=status.HTTP_200_OK)
     
-class BookingDetailView(APIView):
+class ReBookingServiceView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
-    def get(self, request, booking_id):
-        booking = get_object_or_404(ServiceBook, id=booking_id)
+    def post(self, request, booking_id):
+        try:
+            old_booking = ServiceBook.objects.get(id=booking_id, user=request.user)
+        except ServiceBook.DoesNotExist:
+            return Response({"status": 404, "message": "Booking not found."})
 
-        data = {
-            "id": booking.id,
-            "service": booking.service.name,
-            "technician_required": booking.technician_required,
-            "status": booking.status,
-            "assigned_technician": booking.assigned_technician.username if booking.assigned_technician else None,
-            "photo": request.build_absolute_uri(booking.photo.url) if booking.photo else None,
-            "comment": booking.comment,
-            "is_bill_generated": booking.is_bill_generated,
-            "pdf_url": booking.pdf_url,
-            "created_at": booking.created_date
-        }
-
+        # Create new booking with selected fields copied
+        new_booking = ServiceBook.objects.create(
+            user=old_booking.user,
+            service=old_booking.service,
+            technician_required=old_booking.technician_required,
+            assigned_technician=old_booking.assigned_technician,
+            quatation_amt=old_booking.quatation_amt,
+            otp_required=old_booking.otp_required,
+            action=old_booking.action,
+            status='assign',  # reset status
+            is_repeated=False,
+            otp_generated_at=timezone.now(),
+            service_start_otp=str(random.randint(100000, 999999))  # generate new OTP
+        )
+        #Mark old booking as repeated
+        old_booking.is_repeated = True
+        old_booking.save(update_fields=["is_repeated"])
         return Response({
-            "status": 200,
-            "message": "Booking details fetched",
-            "data": data
+            "status": 201,
+            "message": "Re-order successful. New booking created.",
+            "new_booking_id": new_booking.id
         })
-

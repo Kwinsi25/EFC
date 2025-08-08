@@ -2,6 +2,7 @@ from django.db import models
 from Accounts.models import CustomerProfile
 from django.core.validators import MinValueValidator, MaxValueValidator
 
+
 class Category(models.Model):
     category_name = models.CharField(max_length=100,blank=False, null=False, unique=True)
     image = models.ImageField(upload_to='category_images/', blank=True, null=True)
@@ -51,6 +52,7 @@ class ReviewRating(models.Model):
     user = models.ForeignKey(CustomerProfile, on_delete=models.CASCADE, related_name='reviews_given')
     service = models.ForeignKey(SubCategory, on_delete=models.SET_NULL, null=True, blank=True)
     electrician = models.ForeignKey(CustomerProfile, on_delete=models.SET_NULL, null=True, blank=True, related_name='reviews_received')
+    booking = models.ForeignKey('Booking.ServiceBook', on_delete=models.CASCADE, null=True, blank=True)
     rating = models.IntegerField(validators=[MinValueValidator(1), MaxValueValidator(5)], blank=False, null=False)
     description = models.TextField(blank=True, null=True)
     after_service_photo = models.ImageField(upload_to='review_photos/', blank=True, null=True)
@@ -60,4 +62,7 @@ class ReviewRating(models.Model):
     updated_date = models.DateTimeField(auto_now=True)
 
     def __str__(self):
-        return f"Review by {self.user.username}"
+        if self.after_service_photo:
+            return f"Review by {self.electrician.username} for {self.service.name} To {self.user.username} - Rating: {self.rating}"
+        else:
+            return f"Review by {self.user.username} for {self.service.name} To {self.electrician.username} - Rating: {self.rating}"

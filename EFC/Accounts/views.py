@@ -179,13 +179,11 @@ class DeviceInfoView(APIView):
         }, status=200)
         
 # Add new address
-from django.contrib.auth.models import AnonymousUser
-
 class AddAddressView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        user = request.user  # ✅ will now be CustomerProfile instance due to custom auth
+        user = request.user  #will now be CustomerProfile instance due to custom auth
 
         serializer = AddressSerializer(data=request.data)
         if serializer.is_valid():

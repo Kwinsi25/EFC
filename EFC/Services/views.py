@@ -10,7 +10,7 @@ from rest_framework.permissions import IsAuthenticated
 
 
 class CategoryListCreateView(APIView):
-    permission_classes = [IsAuthenticated]  # ✅ Require JWT-authenticated user
+    permission_classes = [IsAuthenticated]  #Require JWT-authenticated user
 
     def get(self, request):
         categories = Category.objects.all().order_by('-created_date')
@@ -18,7 +18,7 @@ class CategoryListCreateView(APIView):
         return Response({"status": 200, "message": "Categories fetched", "data": serializer.data})
 
     def post(self, request):
-        # ✅ Allow only if admin
+        # Allow only if admin
         if not isinstance(request.user, CustomerProfile) or request.user.role != 'admin':
             return Response({
                 "detail": "Unauthorized: Admin access required"
@@ -294,54 +294,89 @@ class SubCategoryFullDetailView(APIView):
             "data": response_data
         }, status=200)
     
-class UploadAfterServicePhotoView(APIView):
-    permission_classes = [permissions.AllowAny]
+class ElectricianAfterServicePhotoView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
-        booking_id = request.data.get("booking_id")
-        photo = request.FILES.get("after_service_photo")
+        electrician = request.user
 
-        if not booking_id or not photo:
-            return Response({"error": "booking_id and after_service_photo are required."}, status=400)
+        booking_id = request.data.get('booking')
+        if not booking_id:
+            return Response({"message": "Booking ID is required."}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             booking = ServiceBook.objects.get(id=booking_id)
-            review, created = ReviewRating.objects.get_or_create(
-                service=booking.service,
-                electrician=booking.assigned_technician,
-                user=booking.user,
-                defaults={
-                    'rating': 1  # Temporary default (can be overwritten later)
-                }
-            )
-            review.after_service_photo = photo
-            review.save()
-            return Response({"message": "Photo uploaded successfully."}, status=201)
+            print(booking.user,"--------")
         except ServiceBook.DoesNotExist:
-            return Response({"error": "Booking not found."}, status=404)
+            return Response({"message": "Booking not found."}, status=status.HTTP_404_NOT_FOUND)
 
+        if booking.assigned_technician != electrician:
+            return Response({"message": "You are not assigned to this booking."}, status=status.HTTP_403_FORBIDDEN)
 
-class SubmitReviewRatingView(APIView):
-    permission_classes = [permissions.AllowAny]
+        # Merge data with request.FILES (handled automatically by request.data)
+        data = request.data.dict()
+        data['electrician'] = electrician.id
+        data['user'] = booking.user.id
+        data['service'] = booking.service.id
+        data['booking'] = booking.id
+
+        serializer = ReviewCreateSerializer(data=request.data)
+
+        if serializer.is_valid():
+            serializer.save(
+                user=booking.user,
+                electrician=electrician,
+                service=booking.service,
+                booking=booking
+            )
+            return Response({
+                "status": 201,
+                "message": "Image uploaded successfully.",
+                "data": serializer.data
+            }, status=status.HTTP_201_CREATED)
+        else:
+            return Response({
+                "status": 400,
+                "message": "Invalid data.",
+                "errors": serializer.errors
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+class UserReviewElectricianView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
-        serializer = SubmitReviewRatingSerializer(data=request.data)
+        user = request.user
+
+        booking_id = request.data.get('booking')
+        if not booking_id:
+            return Response({"message": "Booking ID is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            booking = ServiceBook.objects.get(id=booking_id, user=user)
+        except ServiceBook.DoesNotExist:
+            return Response({"message": "Booking not found or unauthorized."}, status=status.HTTP_404_NOT_FOUND)
+
+        if not booking.assigned_technician:
+            return Response({"message": "No electrician assigned for this booking."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Validate serializer
+        serializer = ReviewCreateSerializer(data=request.data)
         if serializer.is_valid():
-            user_id = request.data.get('user')
-            if not user_id:
-                return Response({'error': 'User ID is required'}, status=status.HTTP_400_BAD_REQUEST)
-
-            try:
-                user = CustomerProfile.objects.get(id=user_id)
-            except CustomerProfile.DoesNotExist:
-                return Response({'error': 'Invalid user ID'}, status=status.HTTP_400_BAD_REQUEST)
-
-            serializer.save(user=user)
-
+            serializer.save(
+                user=user,
+                electrician=booking.assigned_technician,
+                service=booking.service,
+                booking=booking
+            )
             return Response({
-                'message': 'Review submitted successfully',
-                'data': serializer.data
+                "status": 201,
+                "message": "Review submitted successfully.",
+                "data": serializer.data
             }, status=status.HTTP_201_CREATED)
 
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        return Response({
+            "status": 400,
+            "message": "Invalid data.",
+            "errors": serializer.errors
+        }, status=status.HTTP_400_BAD_REQUEST)
     

@@ -86,16 +86,14 @@ class ReviewRatingSerializer(serializers.ModelSerializer):
         model = ReviewRating
         fields = ['username', 'rating', 'description', 'after_service_photo', 'created_date']
 
-class AfterServicePhotoUploadSerializer(serializers.ModelSerializer):
+class ReviewCreateSerializer(serializers.ModelSerializer):
+    after_service_photo = serializers.ImageField(required=False, allow_null=True)
     class Meta:
         model = ReviewRating
-        fields = ['after_service_photo']
-
-
-class SubmitReviewRatingSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = ReviewRating
-        fields = ['service', 'electrician', 'rating', 'description', 'after_service_photo']
-
+        fields = [
+            'id','user', 'electrician', 'service',
+            'booking', 'rating', 'description', 'after_service_photo'
+        ]
+        read_only_fields = ['user']
 
 
