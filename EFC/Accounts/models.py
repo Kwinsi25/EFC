@@ -9,7 +9,8 @@ class CustomerProfile(models.Model):
 
     username = models.CharField(max_length=150, unique=True, blank=False, null=False)
     email = models.EmailField(unique=True, blank=False, null=False)
-    mobile = models.CharField(max_length=12, unique=True, blank=False, null=False)
+    country_code = models.CharField(max_length=5, blank=False, null=False)  # e.g. +91 for India
+    mobile = models.CharField(max_length=10, unique=True, blank=False, null=False)
     role = models.CharField(max_length=20,choices=ROLE_METHOD_CHOICES, blank=False, null=False) # user, electrician,, admin
     profile_image = models.ImageField(upload_to='profiles/', blank=True, null=True)
     experience_year = models.IntegerField(blank=True, null=True)

@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from .models import *
 from Booking.models import ServiceBook
-
+import os
 
 class CategorySerializer(serializers.ModelSerializer):
     image_url = serializers.SerializerMethodField()
@@ -16,6 +16,19 @@ class CategorySerializer(serializers.ModelSerializer):
         elif obj.image:
             return obj.image.url
         return None
+    
+    def validate_image(self, value):
+        """
+        Validate file type for uploaded image.
+        Allowed: svg, png, jpg, jpeg
+        """
+        ext = os.path.splitext(value.name)[1].lower()  # Get file extension
+        allowed_extensions = ['.svg', '.png', '.jpg', '.jpeg']
+        if ext not in allowed_extensions:
+            raise serializers.ValidationError(
+                f"Unsupported file format. Allowed formats are: {', '.join(allowed_extensions)}"
+            )
+        return value
 
 class SubCategorySerializer(serializers.ModelSerializer):
     cover_image_url = serializers.SerializerMethodField()
@@ -97,3 +110,11 @@ class ReviewCreateSerializer(serializers.ModelSerializer):
         read_only_fields = ['user']
 
 
+class ReviewRatingSerializerForAdmin(serializers.ModelSerializer):
+    user = serializers.StringRelatedField()  # or customize to show user info
+    electrician = serializers.StringRelatedField()
+    service = serializers.StringRelatedField()
+
+    class Meta:
+        model = ReviewRating
+        fields = '__all__'

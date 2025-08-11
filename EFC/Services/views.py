@@ -379,4 +379,37 @@ class UserReviewElectricianView(APIView):
             "message": "Invalid data.",
             "errors": serializer.errors
         }, status=status.HTTP_400_BAD_REQUEST)
-    
+
+class AdminReviewRatingListView(APIView):
+    permission_classes = [permissions.IsAdminUser]  # Only admin users allowed
+
+    def get(self, request):
+        reviews = ReviewRating.objects.all().order_by('-created_date')
+        serializer = ReviewRatingSerializerForAdmin(reviews, many=True)
+        return Response({
+            "status": 200,
+            "message": "All reviews fetched",
+            "data": serializer.data
+        })
+
+    def patch(self, request, pk):
+        """
+        Partially update a review to set is_approved True or False
+        """
+        try:
+            review = ReviewRating.objects.get(pk=pk)
+        except ReviewRating.DoesNotExist:
+            return Response({"message": "Review not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        is_approved = request.data.get('is_approved')
+        if is_approved is None:
+            return Response({"message": "'is_approved' field is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        review.is_approved = bool(is_approved)
+        review.save()
+        serializer = ReviewRatingSerializerForAdmin(review)
+        return Response({
+            "status": 200,
+            "message": "Review approval status updated",
+            "data": serializer.data
+        })

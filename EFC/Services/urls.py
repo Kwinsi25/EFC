@@ -13,4 +13,5 @@ urlpatterns = [
     path('subcategories/<int:subcategory_id>/full/', SubCategoryFullDetailView.as_view(), name='subcategory-full-detail'),
     path('after-service-image/', ElectricianAfterServicePhotoView.as_view(), name='electrician-create-review'),
     path('review/', UserReviewElectricianView.as_view(), name='review'),
+    path('review-all/', AdminReviewRatingListView.as_view(), name='review-list'),
 ]

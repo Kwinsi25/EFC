@@ -7,7 +7,7 @@ class RegisterSerializer(serializers.ModelSerializer):
     class Meta:
         model = CustomerProfile
         fields = [
-            'username', 'email', 'mobile', 'role',
+            'username', 'email', 'country_code',  'mobile', 'role',
             'profile_image', 'experience_year', 'service_skill',
             'service_km', 'document_type', 'document_file'
         ]
@@ -22,9 +22,16 @@ class RegisterSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Email already exists")
         return value
 
+    def validate_country_code(self, value):
+        if not value.startswith('+'):
+            raise serializers.ValidationError("Country code must start with '+'")
+        if len(value) > 5:
+            raise serializers.ValidationError("Invalid country code")
+        return value
+    
     def validate_mobile(self, value):
-        if not value.isdigit() or len(value) < 10:
-            raise serializers.ValidationError("Enter a valid mobile number")
+        if not value.isdigit() or len(value) != 10:
+            raise serializers.ValidationError("Enter a valid 10-digit mobile number")
         if CustomerProfile.objects.filter(mobile=value).exists():
             raise serializers.ValidationError("Mobile number already exists")
         return value
@@ -44,6 +51,7 @@ class RegisterSerializer(serializers.ModelSerializer):
                         f"{field.replace('_', ' ').capitalize()} is required for electricians"
                     )
         return data
+
 
 class AddressSerializer(serializers.ModelSerializer):
     class Meta:

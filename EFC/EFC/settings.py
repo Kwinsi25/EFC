@@ -54,6 +54,7 @@ INSTALLED_APPS = [
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'Accounts.custom_auth.CustomerJWTAuthentication',  #Use your app path here
+
     )
 }
 

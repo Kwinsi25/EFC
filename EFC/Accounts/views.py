@@ -11,28 +11,81 @@ from django.shortcuts import get_object_or_404
 from .serializers import *
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.permissions import IsAuthenticated
-
+from datetime import datetime, timedelta
 from rest_framework_simplejwt.tokens import RefreshToken
+import re
+from django.contrib.auth import authenticate, login
+from django.contrib.auth.models import User
+from django.views.decorators.csrf import csrf_exempt
+from django.utils.decorators import method_decorator
 
+# Temporary OTP store (for demo only, in production use DB or cache)
+OTP_STORE = {}
 class RegisterAPIView(APIView):
+    """
+    Step 1: Accept user details, validate, generate OTP, and store temporarily.
+    """
     def post(self, request):
         serializer = RegisterSerializer(data=request.data)
         if serializer.is_valid():
-            serializer.save()
+            mobile_key = serializer.validated_data['country_code'] + serializer.validated_data['mobile']
+
+            # Generate OTP
+            otp = str(random.randint(100000, 999999))
+            OTP_STORE[mobile_key] = {
+                "otp": otp,
+                "data": serializer.validated_data,
+                "expires_at": datetime.now() + timedelta(minutes=5)
+            }
+
             return Response({
-                "status": 201,
-                "message": "User registered successfully",
-                "data": serializer.data
-            }, status=status.HTTP_201_CREATED)
+                "status": 200,
+                "message": "OTP sent successfully",
+                "otp": otp  # ⚠️ Remove in production
+            })
+
         return Response({
             "status": 400,
-            "message": "Registration failed",
+            "message": "Invalid data",
             "errors": serializer.errors
-        }, status=status.HTTP_400_BAD_REQUEST)
+        }, status=400)
 
+class VerifyRegisterOTPAPIView(APIView):
+    """
+    Step 2: Verify OTP and create the user.
+    """
+    def post(self, request):
+        country_code = request.data.get('country_code')
+        mobile = request.data.get('mobile')
+        otp_provided = request.data.get('otp')
 
+        if not country_code or not mobile or not otp_provided:
+            return Response({"status": 400, "message": "country_code, mobile, and otp are required"}, status=400)
 
-# #Login API
+        mobile_key = country_code + mobile
+        otp_data = OTP_STORE.get(mobile_key)
+
+        if not otp_data:
+            return Response({"status": 400, "message": "OTP not found or expired"}, status=400)
+
+        if datetime.now() > otp_data["expires_at"]:
+            OTP_STORE.pop(mobile_key, None)
+            return Response({"status": 400, "message": "OTP expired"}, status=400)
+
+        if otp_provided != otp_data["otp"]:
+            return Response({"status": 400, "message": "Invalid OTP"}, status=400)
+
+        # Create user
+        user = CustomerProfile.objects.create(**otp_data["data"])
+        OTP_STORE.pop(mobile_key, None)  # cleanup
+
+        return Response({
+            "status": 201,
+            "message": "User registered successfully",
+            "data": RegisterSerializer(user).data
+        }, status=201)
+
+#Login API
 def get_tokens_for_user(user):
     refresh = RefreshToken.for_user(user)
     return {
@@ -40,44 +93,70 @@ def get_tokens_for_user(user):
         'access': str(refresh.access_token),
     }
 
+# Store pending logins temporarily
+LOGIN_OTP_STORE = {}
 
-class OTPLoginView(APIView):
-    """
-    Login API using username, email, and mobile.
-
-    If user details are correct:
-      - An OTP is sent to the registered mobile number.
-      - If OTP is provided and correct, login is successful.
-      - Also detects device information (device type, OS, browser).
-    """
+class LoginSendOTPView(APIView):
+    """Step 1: Send OTP to user."""
     def post(self, request):
-        username = request.data.get("username")
-        email = request.data.get("email")
+        country_code = request.data.get("country_code")
         mobile = request.data.get("mobile")
-        otp = request.data.get("otp")
 
-        #validate required fields
-        if not (username and email and mobile):
-            return Response({
-                "status": 400,
-                "message": "username, email, and mobile are required",
-                "data": {}
-            }, status=400)
+        # Validate country code
+        if not country_code or not country_code.startswith("+") or not country_code[1:].isdigit():
+            return Response({"status": 400, "message": "Invalid or missing country code"}, status=400)
 
-        # Check if user exists#
+        # Validate mobile
+        if not mobile or not re.fullmatch(r"\d{10}", mobile):
+            return Response({"status": 400, "message": "Invalid or missing mobile number (must be 10 digits)"}, status=400)
+
+        # Check if user exists
         try:
-            user = CustomerProfile.objects.get(username=username, email=email, mobile=mobile)
+            user = CustomerProfile.objects.get(country_code=country_code, mobile=mobile)
         except CustomerProfile.DoesNotExist:
-            return Response({
-                "status": 404,
-                "message": "User not found",
-                "data": {}
-            }, status=404)
+            return Response({"status": 404, "message": "User not found"}, status=404)
 
-        #Device Detection
+        # Generate OTP
+        generated_otp = str(random.randint(100000, 999999))
+        mobile_key = f"{country_code}{mobile}"
+
+        LOGIN_OTP_STORE[mobile_key] = {
+            "otp": generated_otp,
+            "user_id": user.id
+        }
+
+        print(f"[DEBUG] OTP for {mobile_key}: {generated_otp}")
+
+        return Response({
+            "status": 200,
+            "message": "OTP sent to your mobile",
+            "otp": generated_otp
+        }, status=200)
+
+class LoginVerifyOTPView(APIView):
+    """Step 2: Verify OTP and login."""
+    def post(self, request):
+        otp = request.data.get("otp")
+        if not otp:
+            return Response({"status": 400, "message": "OTP is required"}, status=400)
+
+        # Find matching OTP in store
+        found_key = None
+        for key, data in LOGIN_OTP_STORE.items():
+            if data["otp"] == otp:
+                found_key = key
+                break
+
+        if not found_key:
+            return Response({"status": 400, "message": "Invalid OTP"}, status=400)
+
+        # Get user and remove OTP from store
+        user_id = LOGIN_OTP_STORE.pop(found_key)["user_id"]
+        user = CustomerProfile.objects.get(id=user_id)
+
+        # Device Detection
         user_agent_str = request.META.get("HTTP_USER_AGENT", "")
         user_agent = parse(user_agent_str)
-
         device_type = "PC"
         if user_agent.is_mobile:
             device_type = "Mobile"
@@ -88,59 +167,76 @@ class OTPLoginView(APIView):
 
         os_name = user_agent.os.family
         browser = user_agent.browser.family
-        
-        # Send OTP
-        if not otp:
-            generated_otp = str(random.randint(100000, 999999))
-            cache.set(f"otp_{mobile}", generated_otp, timeout=300)  # valid 5 mins
-            print(f"[DEBUG] OTP for {mobile}: {generated_otp}")
-            return Response({
-                "status": 200,
-                "message": "OTP sent to your mobile",
-                "data": {
-                    "user_id": user.id,
-                    "username": user.username,
-                    "device_type": device_type,
-                    "os": os_name,
-                    "browser": browser
-                }
-            }, status=200)
 
-        #Verify OTP
-        cached_otp = cache.get(f"otp_{mobile}")
-        if cached_otp == otp:
-            cache.delete(f"otp_{mobile}")
-            user = CustomerProfile.objects.get(username=username, email=email, mobile=mobile)
+        # Save login log
+        SystemLog.objects.create(
+            type="login",
+            performed_by=user,
+            remark=f"Login from {device_type} using {browser} on {os_name}"
+        )
 
-            #Save login log into systemLog
-            SystemLog.objects.create(
-                type="login",
-                performed_by=user,  # ✅ correct
-                remark=f"Login from {device_type} using {browser} on {os_name}"
-            )
+        # Generate JWT token
+        tokens = get_tokens_for_user(user)
 
-            # Generate JWT token
-            tokens = get_tokens_for_user(user)
+        return Response({
+            "status": 200,
+            "message": "Login success",
+            "data": {
+                "user_id": user.id,
+                "country_code": user.country_code,
+                "mobile": user.mobile,
+                "access_token": tokens['access'],
+                "refresh_token": tokens['refresh'],
+                "device_type": device_type,
+                "os": os_name,
+                "browser": browser
+            }
+        }, status=200)
 
-            return Response({
-                "status": 200,
-                "message": "Login success",
-                "data": {
-                    "user_id": user.id,
-                    "username": user.username,
-                    "access_token": tokens['access'],
-                    "refresh_token": tokens['refresh'],
-                    "device_type": device_type,
-                    "os": os_name,
-                    "browser": browser
-                }
-            }, status=200)
-        else:
-            return Response({
-                "status": 400,
-                "message": "Invalid OTP",
-                "data": {}
-            }, status=400)
+
+#admin login view
+from django.views.decorators.csrf import csrf_exempt
+from django.utils.decorators import method_decorator
+
+@method_decorator(csrf_exempt, name='dispatch')
+class AdminLoginView(APIView):
+    def post(self, request):
+        email = request.data.get("email")
+        password = request.data.get("password")
+        print(f"[DEBUG] Admin login attempt with email: {email}")
+        if not email or not password:
+            return Response({"status": 400, "message": "Email and password are required"}, status=400)
+
+        # Django default User model uses username as login by default, so find user by email first
+        try:
+            user = User.objects.get(email=email)
+        except User.DoesNotExist:
+            return Response({"status": 401, "message": "Invalid credentials"}, status=401)
+
+        # Authenticate user by username and password (username is user.username)
+        user = authenticate(username=user.username, password=password)
+        if user is None:
+            return Response({"status": 401, "message": "Invalid credentials"}, status=401)
+
+        # Check if user is admin (staff or superuser)
+        if not (user.is_staff or user.is_superuser):
+            return Response({"status": 403, "message": "You are not authorized as admin"}, status=403)
+
+        # Generate JWT tokens - use your existing method, assuming get_tokens_for_user(user) exists
+        tokens = get_tokens_for_user(user)
+
+        return Response({
+            "status": 200,
+            "message": "Admin login success",
+            "data": {
+                "user_id": user.id,
+                "username": user.username,
+                "email": user.email,
+                "access_token": tokens['access'],
+                "refresh_token": tokens['refresh'],
+            }
+        }, status=200)
+
 
 #device detection API(optional)
 class DeviceInfoView(APIView):
