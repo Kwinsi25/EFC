@@ -1,7 +1,7 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import permissions, status
-from .models import Payment
+from .models import *
 from Booking.models import *
 from django.utils import timezone
 from django.conf import settings
@@ -9,6 +9,9 @@ from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 import os
+from Booking.models import ServiceBook
+from datetime import date
+from django.db.models import Sum
 
 class MakePaymentView(APIView):
     permission_classes = [permissions.IsAuthenticated]
@@ -103,4 +106,55 @@ class MakePaymentView(APIView):
                 "bill_pdf_url": pdf_url,
                 "created": payment.created_date,
             }
+        })
+
+
+class UpdateTechnicianEarningsSummaryAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+        
+        # Assuming user has 'role' attribute directly (if not, adapt accordingly)
+        if getattr(user, 'role', None) != 'admin':
+            return Response({
+                "success": False,
+                "message": "Unauthorized: Admin access required",
+                "data": None
+            }, status=401)
+
+        today = date.today()
+
+        technicians = CustomerProfile.objects.filter(role='electrician')
+        results = []
+
+        for technician in technicians:
+            bookings = ServiceBook.objects.filter(
+                assigned_technician=technician,
+                status='complete',
+                updated_date__date=today
+            )
+            total_amount = bookings.aggregate(total=Sum('quatation_amt'))['total'] or 0
+            completed_jobs = bookings.count()
+
+            EarningsSummary.objects.update_or_create(
+                user=technician,
+                created_date=today,
+                defaults={
+                    'total': total_amount,
+                    'completed_job': completed_jobs,
+                }
+            )
+
+            results.append({
+                "technician_id": technician.id,
+                "technician_username": technician.username,
+                "total_earnings": total_amount,
+                "completed_jobs": completed_jobs,
+            })
+
+        return Response({
+            "success": True,
+            "message": f"Earnings summary updated for {len(results)} technicians for date {today}",
+            "data": results
         })

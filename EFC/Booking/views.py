@@ -14,7 +14,55 @@ from django.conf import settings
 from reportlab.lib.pagesizes import letter
 from django.http import FileResponse, Http404
 from Services.models import *
+from Support.models import *
+
 # from .models import Cart, ServiceBook, Address  # adjust import paths as needed
+
+@staticmethod
+def create_booking_notifications(user_profile, electrician_profile, booking):
+    """
+    Creates booking notifications for both the customer and the electrician,
+    and includes related party info.
+    Returns: (user_notification, electrician_notification) as dicts.
+    """
+    # For the customer
+    user_notification = Notification.objects.create(
+        user=user_profile,
+        electrician=electrician_profile,
+        recipient_type='user',
+        title='Booking Confirmed',
+        message=f"Your booking for '{booking.service.name}' has been confirmed. OTP: {booking.service_start_otp}",
+        type='booking',
+        channel='app',
+        is_sent=True
+        
+    )
+
+    # For the electrician
+    electrician_notification = Notification.objects.create(
+        electrician=electrician_profile,
+        user=user_profile,
+        recipient_type='electrician',
+        title='Service Booked For You',
+        message=f"You have been assigned a service for '{booking.service.name}'",
+        type='booking',
+        channel='app',
+        is_sent=True
+    )
+
+    # Return serialized versions
+    return {
+        "user_notification": {
+            "id": user_notification.id,
+            "title": user_notification.title,
+            "message": user_notification.message
+        },
+        "electrician_notification": {
+            "id": electrician_notification.id,
+            "title": electrician_notification.title,
+            "message": electrician_notification.message
+        }
+    }
 
 
 class AddToCartView(APIView):
@@ -226,12 +274,20 @@ class CheckoutView(APIView):
                 otp_generated_at=timezone.now(),
                 assigned_technician=electrician if electrician else None
             )
+            notifications_list = []
 
             total_amount += item.total_price
-
+            
             if electrician:
                 assigned_count += 1
                 msg = f"Electrician '{electrician.username}' assigned."
+                booking_notifications = create_booking_notifications(
+                    user_profile=booking.user,
+                    electrician_profile=booking.assigned_technician,
+                    booking=booking
+                )
+                notifications_list.append(booking_notifications)
+
             else:
                 msg = "No electrician found within 5km."
 
@@ -258,7 +314,8 @@ class CheckoutView(APIView):
             "data": {
                 "total_amount": total_amount,
                 "bookings": bookings,
-                "default_address": {
+                "notifications": notifications_list,
+                "address": {
                     "label": default_address.label,
                     "address": default_address.address,
                     "city": default_address.city,

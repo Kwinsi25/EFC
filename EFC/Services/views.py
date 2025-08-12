@@ -6,7 +6,7 @@ from .serializers import *
 from django.shortcuts import get_object_or_404
 from django.db.models import Q,Avg
 from Accounts.auth_utils import get_authenticated_admin
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 
 
 class CategoryListCreateView(APIView):
@@ -381,9 +381,16 @@ class UserReviewElectricianView(APIView):
         }, status=status.HTTP_400_BAD_REQUEST)
 
 class AdminReviewRatingListView(APIView):
-    permission_classes = [permissions.IsAdminUser]  # Only admin users allowed
+    permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        # Only admin can view all reviews
+        if getattr(request.user, 'role', None) != 'admin':
+            return Response(
+                {"message": "Only admins can view all reviews."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         reviews = ReviewRating.objects.all().order_by('-created_date')
         serializer = ReviewRatingSerializerForAdmin(reviews, many=True)
         return Response({
@@ -392,24 +399,57 @@ class AdminReviewRatingListView(APIView):
             "data": serializer.data
         })
 
-    def patch(self, request, pk):
-        """
-        Partially update a review to set is_approved True or False
-        """
+    def patch(self, request, *args, **kwargs):
+        # Get review id from URL or request body
+        review_id = kwargs.get('review_id') or kwargs.get('pk') or request.data.get('review_id')
+        if not review_id:
+            return Response({"message": "Review ID is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Admin check
+        if getattr(request.user, 'role', None) != 'admin':
+            return Response({"message": "Only admins can approve/disapprove reviews."},
+                            status=status.HTTP_403_FORBIDDEN)
+
         try:
-            review = ReviewRating.objects.get(pk=pk)
+            review = ReviewRating.objects.get(pk=review_id)
         except ReviewRating.DoesNotExist:
-            return Response({"message": "Review not found"}, status=status.HTTP_404_NOT_FOUND)
+            return Response({"message": "Review not found."}, status=status.HTTP_404_NOT_FOUND)
 
         is_approved = request.data.get('is_approved')
         if is_approved is None:
             return Response({"message": "'is_approved' field is required."}, status=status.HTTP_400_BAD_REQUEST)
 
+        # Update approval status
         review.is_approved = bool(is_approved)
+
+        # If disapproved, require a reason
+        if not review.is_approved:
+            reason = request.data.get('disapproval_reason')
+            if not reason:
+                return Response({"message": "'disapproval_reason' is required when disapproving a review."},
+                                status=status.HTTP_400_BAD_REQUEST)
+            review.flagged_reason = reason  # Make sure your model has this field
+        else:
+            # Clear reason if approved
+            review.flagged_reason = None
+
         review.save()
+
         serializer = ReviewRatingSerializerForAdmin(review)
         return Response({
             "status": 200,
             "message": "Review approval status updated",
+            "data": serializer.data
+        })
+    
+class PublicReviewRatingListView(APIView):
+    permission_classes = [AllowAny]  # Anyone can view
+
+    def get(self, request):
+        reviews = ReviewRating.objects.filter(is_approved=True).order_by('-created_date')
+        serializer = ReviewRatingSerializerForAdmin(reviews, many=True)
+        return Response({
+            "status": 200,
+            "message": "Approved reviews fetched successfully",
             "data": serializer.data
         })
